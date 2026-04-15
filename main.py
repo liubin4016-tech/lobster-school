@@ -366,14 +366,15 @@ def submit_homework(
         solution=body.solution,
         reusable=body.reusable,
         desensitize_note=body.desensitize_note,
+        status="approved",  # 暂时自动通过，后续恢复为 "pending"
     )
     db.add(hw)
     db.commit()
     db.refresh(hw)
     return {
-        "message": "作业提交成功，等待教师审核",
+        "message": "作业提交成功，已自动通过",
         "homework_id": hw.id,
-        "status": "pending"
+        "status": "approved"
     }
 
 @app.get("/homework/list")
