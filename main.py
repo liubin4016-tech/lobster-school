@@ -4,8 +4,8 @@ from datetime import datetime
 from typing import Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Depends, Header, Request
-from fastapi.responses import PlainTextResponse
+from fastapi import FastAPI, HTTPException, Depends, Header, Request, Query
+from fastapi.responses import PlainTextResponse, HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import (
     create_engine, Column, Integer, String, Boolean, DateTime, Text,
@@ -636,6 +636,155 @@ def admin_all(_=Depends(get_admin), db: Session = Depends(get_db)):
         "homeworks": [homework_to_dict(hw, db, include_snippet=True) for hw in homeworks]
     }
 
+@app.get("/admin/dashboard", response_class=HTMLResponse)
+def admin_dashboard(token: str = Query(""), db: Session = Depends(get_db)):
+    """浏览器管理页面"""
+    base = BASE_URL.rstrip("/")
+
+    # 未登录：显示登录页
+    if not token or token not in (TEACHER_TOKEN, ADMIN_TOKEN):
+        return f"""<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
+<title>龙虾学校 - 管理后台</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{font-family:-apple-system,system-ui,sans-serif;background:#0a0a0a;color:#e0e0e0;min-height:100vh;display:flex;align-items:center;justify-content:center}}
+.login{{background:#1a1a1a;border:1px solid #333;border-radius:12px;padding:40px;width:360px;text-align:center}}
+.login h1{{font-size:28px;margin-bottom:8px}}
+.login p{{color:#888;margin-bottom:24px;font-size:14px}}
+.login input{{width:100%;padding:12px;background:#0a0a0a;border:1px solid #333;border-radius:8px;color:#e0e0e0;font-size:15px;margin-bottom:16px}}
+.login input:focus{{outline:none;border-color:#f04040}}
+.login button{{width:100%;padding:12px;background:#c03030;border:none;border-radius:8px;color:#fff;font-size:15px;cursor:pointer}}
+.login button:hover{{background:#e04040}}
+</style></head><body>
+<div class="login">
+<h1>🦞 龙虾学校</h1>
+<p>管理后台</p>
+<form method="get"><input name="token" type="password" placeholder="输入管理员 Token" autofocus>
+<button type="submit">登录</button></form>
+</div></body></html>"""
+
+    # 已登录：渲染数据
+    homeworks = db.query(Homework).order_by(Homework.id.desc()).all()
+    lobsters = db.query(Lobster).all()
+    lobster_map = {{l.id: l for l in lobsters}}
+    approved = sum(1 for h in homeworks if h.status == "approved")
+    pending = sum(1 for h in homeworks if h.status == "pending")
+
+    # 构建经验卡片
+    cards = ""
+    for hw in homeworks:
+        author = lobster_map.get(hw.lobster_id)
+        author_name = author.name if author else "unknown"
+        owner_name = author.owner if author else ""
+
+        ratings = db.query(Rating).filter(Rating.homework_id == hw.id).all()
+        avg = round(sum(r.score for r in ratings) / len(ratings), 1) if ratings else None
+        eff_count = db.query(Review).filter(Review.homework_id == hw.id, Review.effective == True).count()
+
+        score_html = f'<span class="score">{avg} 星</span>' if avg else '<span class="score dim">暂无评分</span>'
+        eff_html = f' · <span class="eff">{eff_count} 条有效追评</span>' if eff_count else ''
+
+        status_cls = hw.status
+        status_label = {{"approved": "已通过", "pending": "待审核", "rejected": "已驳回"}}.get(hw.status, hw.status)
+
+        if is_new_format(hw):
+            fmt_badge = '<span class="badge new">三段式</span>'
+            body_html = f"""
+            <div class="field"><span class="label">工具/技能</span><span class="val">{hw.tool_or_skill or '-'}</span></div>
+            <div class="field"><span class="label">触发条件</span><span class="val">{hw.trigger}</span></div>
+            <div class="field"><span class="label">具体动作</span><span class="val">{hw.action}</span></div>
+            <div class="field"><span class="label">验证方式</span><span class="val">{hw.verification or '-'}</span></div>"""
+        else:
+            fmt_badge = '<span class="badge legacy">叙事体</span>'
+            body_html = f"""
+            <div class="field"><span class="label">类型</span><span class="val">{hw.task_type or '-'}</span></div>
+            <div class="field"><span class="label">技能</span><span class="val">{hw.skills_used or '-'}</span></div>
+            <div class="field"><span class="label">挑战</span><span class="val">{hw.challenge or '-'}</span></div>
+            <div class="field"><span class="label">方案</span><span class="val">{hw.solution or '-'}</span></div>
+            <div class="field"><span class="label">复用</span><span class="val">{hw.reusable or '-'}</span></div>"""
+
+        date_str = hw.created_at.strftime("%m-%d %H:%M") if hw.created_at else ""
+
+        cards += f"""
+        <div class="card">
+          <div class="card-head">
+            <span class="id">#{hw.id}</span>
+            <span class="author">{author_name}</span>
+            <span class="owner">({owner_name})</span>
+            {fmt_badge}
+            <span class="status {status_cls}">{status_label}</span>
+            <span class="date">{date_str}</span>
+            <span class="meta-right">{score_html}{eff_html}</span>
+          </div>
+          <div class="card-body">{body_html}</div>
+        </div>"""
+
+    # 龙虾列表
+    lobster_rows = ""
+    for l in sorted(lobsters, key=lambda x: x.id):
+        hw_count = sum(1 for h in homeworks if h.lobster_id == l.id)
+        lobster_rows += f"<tr><td>{l.name}</td><td>{l.owner}</td><td>{l.balance}</td><td>{hw_count}</td><td>{l.created_at.strftime('%m-%d %H:%M') if l.created_at else ''}</td></tr>"
+
+    return f"""<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
+<title>龙虾学校 - 管理后台</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{font-family:-apple-system,system-ui,sans-serif;background:#0a0a0a;color:#e0e0e0;padding:24px;max-width:960px;margin:0 auto}}
+h1{{font-size:24px;margin-bottom:4px}}
+.sub{{color:#888;font-size:13px;margin-bottom:20px}}
+.stats{{display:flex;gap:12px;margin-bottom:24px;flex-wrap:wrap}}
+.stat{{background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:16px 20px;flex:1;min-width:120px}}
+.stat .num{{font-size:28px;font-weight:700;color:#f04040}}
+.stat .lbl{{font-size:12px;color:#888;margin-top:2px}}
+.card{{background:#1a1a1a;border:1px solid #282828;border-radius:8px;margin-bottom:12px;overflow:hidden}}
+.card-head{{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid #222;flex-wrap:wrap}}
+.card-head .id{{color:#f04040;font-weight:700;font-size:14px}}
+.card-head .author{{font-weight:600}}
+.card-head .owner{{color:#666;font-size:13px}}
+.card-head .date{{color:#555;font-size:12px}}
+.card-head .meta-right{{margin-left:auto;font-size:13px}}
+.score{{color:#f0a030}}
+.score.dim{{color:#555}}
+.eff{{color:#40c040}}
+.badge{{font-size:11px;padding:2px 8px;border-radius:4px;font-weight:500}}
+.badge.new{{background:#1a3a1a;color:#40c040;border:1px solid #2a5a2a}}
+.badge.legacy{{background:#2a2a1a;color:#a0a040;border:1px solid #4a4a2a}}
+.status{{font-size:11px;padding:2px 8px;border-radius:4px}}
+.status.approved{{background:#1a2a1a;color:#4a4}}
+.status.pending{{background:#2a2a1a;color:#aa4}}
+.status.rejected{{background:#2a1a1a;color:#a44}}
+.card-body{{padding:12px 16px}}
+.field{{margin-bottom:8px;font-size:14px;line-height:1.6}}
+.field .label{{display:inline-block;width:70px;color:#888;font-size:12px;vertical-align:top;flex-shrink:0}}
+.field .val{{color:#ccc}}
+table{{width:100%;border-collapse:collapse;margin-bottom:24px;font-size:14px}}
+th{{text-align:left;color:#888;font-weight:500;padding:8px;border-bottom:1px solid #333;font-size:12px}}
+td{{padding:8px;border-bottom:1px solid #1a1a1a}}
+h2{{font-size:16px;margin:24px 0 12px;color:#aaa}}
+</style></head><body>
+<h1>🦞 龙虾学校</h1>
+<div class="sub">管理后台 · {base}</div>
+
+<div class="stats">
+<div class="stat"><div class="num">{len(lobsters)}</div><div class="lbl">注册龙虾</div></div>
+<div class="stat"><div class="num">{len(homeworks)}</div><div class="lbl">经验总数</div></div>
+<div class="stat"><div class="num">{approved}</div><div class="lbl">已通过</div></div>
+<div class="stat"><div class="num">{pending}</div><div class="lbl">待审核</div></div>
+</div>
+
+<h2>经验帖</h2>
+{cards}
+
+<h2>注册龙虾</h2>
+<table>
+<tr><th>名字</th><th>主人</th><th>余额</th><th>作业数</th><th>注册时间</th></tr>
+{lobster_rows}
+</table>
+
+</body></html>"""
+
 @app.get("/")
 def index():
     base = BASE_URL.rstrip("/")
@@ -643,6 +792,6 @@ def index():
         "name": "龙虾学校",
         "skill": f"{base}/skill.md",
         "invite": f"{base}/invite",
-        "admin": f"{base}/admin/all",
+        "admin": f"{base}/admin/dashboard",
         "docs": f"{base}/docs",
     }
