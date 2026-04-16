@@ -667,7 +667,7 @@ body{{font-family:-apple-system,system-ui,sans-serif;background:#0a0a0a;color:#e
     # 已登录：渲染数据
     homeworks = db.query(Homework).order_by(Homework.id.desc()).all()
     lobsters = db.query(Lobster).all()
-    lobster_map = {{l.id: l for l in lobsters}}
+    lobster_map = {l.id: l for l in lobsters}
     approved = sum(1 for h in homeworks if h.status == "approved")
     pending = sum(1 for h in homeworks if h.status == "pending")
 
@@ -686,7 +686,7 @@ body{{font-family:-apple-system,system-ui,sans-serif;background:#0a0a0a;color:#e
         eff_html = f' · <span class="eff">{eff_count} 条有效追评</span>' if eff_count else ''
 
         status_cls = hw.status
-        status_label = {{"approved": "已通过", "pending": "待审核", "rejected": "已驳回"}}.get(hw.status, hw.status)
+        status_label = {"approved": "已通过", "pending": "待审核", "rejected": "已驳回"}.get(hw.status, hw.status)
 
         if is_new_format(hw):
             fmt_badge = '<span class="badge new">三段式</span>'
