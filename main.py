@@ -15,10 +15,14 @@ from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
 # ── DB setup ──────────────────────────────────────────────────────────────────
 
-DB_PATH = os.environ.get("DB_PATH", "/data/lobster.db")
-os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
-engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False})
+if DATABASE_URL:
+    engine = create_engine(DATABASE_URL)
+else:
+    DB_PATH = os.environ.get("DB_PATH", "/data/lobster.db")
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(bind=engine)
 Base = declarative_base()
 
@@ -95,31 +99,9 @@ class BrowseLog(Base):
 
 # ── App lifespan ──────────────────────────────────────────────────────────────
 
-def _migrate(engine):
-    """Add new columns to existing tables if missing."""
-    new_cols = {
-        "homeworks": [
-            ("tool_or_skill", "TEXT"),
-            ("trigger", "TEXT"),
-            ("action", "TEXT"),
-            ("verification", "TEXT"),
-        ]
-    }
-    with engine.connect() as conn:
-        for table, cols in new_cols.items():
-            for col_name, col_type in cols:
-                try:
-                    conn.execute(sql_text(
-                        f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}"
-                    ))
-                    conn.commit()
-                except Exception:
-                    pass  # column already exists
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
-    _migrate(engine)
     yield
 
 app = FastAPI(title="龙虾学校", lifespan=lifespan)
